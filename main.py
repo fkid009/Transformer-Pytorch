@@ -1,85 +1,50 @@
-import logging
+import time
 
 import torch
-import pytorch_lightning as pl
-from torch.utils.data import DataLoader
-from datasets import load_dataset
+import lightning as L
 
-from trainer import TranslationDataset, TransformerLitModule, build_tokenizers
+from data import PAD, CharTokenizer, load_data, build_dataloaders
+from transformer import Transformer
+from trainer import LitTransformer
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
-logger = logging.getLogger(__name__)
+MAX_LEN = 256       # 글자 수 기준 (SOS/EOS 포함)
+BATCH_SIZE = 64
 
-# ── Hyperparameters ──
-VOCAB_SIZE = 4000
 D_MODEL = 256
 N_HEADS = 8
 N_LAYERS = 3
-MAX_LEN = 128
-BATCH_SIZE = 64
 DROPOUT = 0.1
-LR = 1e-4
+
+LR = 3e-4
 MAX_EPOCHS = 10
 
 
 def main():
-    # ── Step 1: Load dataset ──
-    logger.info("Loading Multi30k dataset...")
-    dataset = load_dataset("bentrevett/multi30k")
-    train_data = dataset["train"]
-    val_data = dataset["validation"]
-    logger.info(f"Train: {len(train_data)} samples, Val: {len(val_data)} samples")
+    L.seed_everything(42)
 
-    # ── Step 2: Build tokenizers ──
-    logger.info(f"Building tokenizers (vocab_size={VOCAB_SIZE})...")
-    src_tokenizer, tgt_tokenizer = build_tokenizers(train_data, vocab_size=VOCAB_SIZE)
-    logger.info(f"Source vocab size: {len(src_tokenizer.vocab)}")
-    logger.info(f"Target vocab size: {len(tgt_tokenizer.vocab)}")
+    dataset = load_data()
+    texts = [x[lang] for split in ("train", "validation") for x in dataset[split] for lang in ("en", "de")]
+    tokenizer = CharTokenizer(texts)  # en/de 공유 vocab
+    train_loader, val_loader = build_dataloaders(dataset, tokenizer, MAX_LEN, BATCH_SIZE)
 
-    # ── Step 3: Create dataloaders ──
-    logger.info(f"Creating dataloaders (max_len={MAX_LEN}, batch_size={BATCH_SIZE})...")
-    train_dataset = TranslationDataset(train_data, src_tokenizer, tgt_tokenizer, MAX_LEN)
-    val_dataset = TranslationDataset(val_data, src_tokenizer, tgt_tokenizer, MAX_LEN)
+    model = Transformer(tokenizer.vocab_size, tokenizer.vocab_size, D_MODEL, N_HEADS, N_LAYERS, MAX_LEN, PAD, DROPOUT)
+    lit_model = LitTransformer(model, LR)
 
-    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=0)
-    val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=0)
-
-    # ── Step 4: Initialize model ──
-    logger.info("Initializing Transformer model...")
-    model = TransformerLitModule(
-        src_vocab_size=len(src_tokenizer.vocab),
-        tgt_vocab_size=len(tgt_tokenizer.vocab),
-        d_model=D_MODEL,
-        n_heads=N_HEADS,
-        n_layers=N_LAYERS,
-        max_len=MAX_LEN,
-        pad_idx=src_tokenizer.pad_id,
-        dropout=DROPOUT,
-        lr=LR,
-    )
-    total_params = sum(p.numel() for p in model.parameters())
-    logger.info(f"Total parameters: {total_params:,}")
-
-    # ── Step 5: Train ──
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    logger.info(f"Device: {device}")
-    if device == "cuda":
-        logger.info(f"GPU: {torch.cuda.get_device_name(0)}")
-    logger.info("Starting training...")
-    trainer = pl.Trainer(
-        max_epochs=MAX_EPOCHS,
+    trainer = L.Trainer(
         accelerator="auto",
-        precision="16-mixed",
-        callbacks=[
-            pl.callbacks.ModelCheckpoint(monitor="val_loss", mode="min", save_top_k=1),
-            pl.callbacks.EarlyStopping(monitor="val_loss", patience=3, mode="min"),
-        ],
+        devices=1,
+        max_epochs=MAX_EPOCHS,
+        precision="16-mixed" if torch.cuda.is_available() else "32-true",
+        gradient_clip_val=1.0,    # gradient 폭주 방지
         log_every_n_steps=50,
     )
 
-    trainer.fit(model, train_loader, val_loader)
-    logger.info("Training complete.")
+    start = time.time()
+    trainer.fit(lit_model, train_loader, val_loader)
+    print(f"학습 시간: {(time.time() - start) / 60:.1f}분")
+    if torch.cuda.is_available():
+        print(f"최대 GPU 메모리: {torch.cuda.max_memory_allocated() / 1024**3:.2f} GB")
 
 
-if __name__ == "__main__":
+if __name__ == "__main__": 
     main()

@@ -10,8 +10,8 @@ embedding.py      Token Embedding + Positional Encoding
 encoder.py        Encoder Layer & Encoder
 decoder.py        Decoder Layer & Decoder
 transformer.py    Full Transformer model
-tokenizer.py      WordPiece Tokenizer
-trainer.py        PyTorch Lightning module & dataset
+data.py           Char tokenizer & dataloaders
+trainer.py        Lightning module
 main.py           Training entry point
 ```
 
@@ -29,10 +29,9 @@ python main.py
 | d_model | 256 |
 | n_heads | 8 |
 | n_layers | 3 |
-| vocab_size | 4000 |
-| max_len | 128 |
+| max_len | 256 (chars) |
 | batch_size | 64 |
-| lr | 1e-4 |
+| lr | 3e-4 |
 | max_epochs | 10 |
 
 Edit `main.py` to change hyperparameters.
